@@ -1,0 +1,135 @@
+#Load Data
+setwd("~/Downloads/DS2")
+mae <- function(x,y){
+  return(mean(abs(x-y)))
+}
+alltrain <- read.csv("train.csv")
+
+set.seed(42)
+alltrain$fold <- sample(1:10, nrow(alltrain), replace = TRUE)
+
+#Create a new category that gathers and isolates high paying jobs
+alltrain$highpaycategory <- grepl('Oil', alltrain$Category) | grepl('IT', alltrain$Category) | grepl('Accounting', alltrain$Category) | grepl('Finance', alltrain$Category) | grepl('Consultancy', alltrain$Category) | grepl('Engineering', alltrain$Category) | grepl('Advertising', alltrain$Category) | grepl('Scientific', alltrain$Category)
+
+#Clean up Normalized Locations
+locations.counts <- summary(alltrain$LocationNormalized)
+top.locations <- names(locations.counts[order(locations.counts, decreasing= TRUE)][1:10])
+alltrain$TopLocation <- factor(alltrain$LocationNormalized, levels=top.locations)
+alltrain$TopLocation[is.na(alltrain$TopLocation)] <- "(Other)"
+alltrain$TopLocation[alltrain$TopLocation == "UK"] <- "(Other)"
+alltrain$TopLocation <- factor(alltrain$LocationNormalized, levels=top.locations)
+
+alltrain$Manager <- grepl('Lead', alltrain$Title, ignore.case=TRUE) | grepl('Senior', alltrain$Title, ignore.case=TRUE) | grepl('Head', alltrain$Title,ignore.case=TRUE) | grepl('Manager', alltrain$Title, ignore.case=TRUE) | grepl('Director', alltrain$Title, ignore.case=TRUE)
+alltrain$Experience <- grepl('experience', alltrain$FullDescription)
+
+train <- subset(alltrain, fold != 3)
+test <- subset(alltrain, fold == 3)
+
+#1st model based on contract type
+model <- lm(SalaryNormalized ~ ContractType, data=train)
+summary(model) #Rsquared = .02
+
+#2nd model that includes contract time
+model <- lm(SalaryNormalized ~ ContractType + ContractTime, data=train)
+summary(model) #Rsquared = .07
+
+#3rd model that multiplies the two variables
+model <- lm(SalaryNormalized ~ ContractType * ContractTime, data=train)
+summary(model) #Rsquared = .08
+
+#3rd model based on contract type and time and high paying category that was created above
+model <- lm(SalaryNormalized ~ ContractType * ContractTime + highpaycategory, data=train)
+summary(model) #RSquared = .13
+mae(fitted(model), train$SalaryNormalized)
+mae(predict(model, test), test$SalaryNormalized) #11001
+#High Paying category detracts from this model
+
+#4th model that pulls in category, regardless of the high paying category that I made
+model <- lm(SalaryNormalized ~ ContractType * ContractTime + Category, data=train)
+summary(model) #.20
+mae(fitted(model), train$SalaryNormalized) #10213
+mae(predict(model, test), test$SalaryNormalized) #10376
+
+#5th model that pulls in location
+model <- lm(SalaryNormalized ~ Category + TopLocation + ContractType*ContractTime, data=train)
+summary(model) #.29
+mae(fitted(model), train$SalaryNormalized) #14323 this is big?
+
+#6th model that pulls in Manager
+model <- lm(SalaryNormalized ~ Manager, data=train)
+summary(model) #Rsquared = .07
+model <- lm(SalaryNormalized ~ Category + TopLocation + Manager + ContractType*ContractTime, data=train)
+summary(model) #.35
+mae(fitted(model), train$SalaryNormalized) #14689. Not sure why this is increasing, but I think my models getting better?
+
+#7th model that pulls in Experience
+model <- lm(SalaryNormalized ~ Experience, data=train)
+summary(model) #Rsquared = .003
+model <- lm(SalaryNormalized ~ Category + TopLocation + Experience + Manager + ContractType*ContractTime, data=train)
+summary(model) #.35 No improvement, discarding
+
+
+#Log Investigation
+hist(train$SalaryNormalized)
+#Distribution is off, let's do a log regression
+model <- lm(log(SalaryNormalized) ~ Category + TopLocation + Manager + ContractType*ContractTime, data=train)
+summary(model) #.41
+mae(exp(fitted(model)), train$SalaryNormalized) #13802
+
+#DAAG
+library('DAAG')
+
+cv.lm(df=train, form.lm = formula(SalaryNormalized ~ Category + ContractTime), m=3)#not quite sure how to use this, but the picture is pretty
+
+
+#Location Tree
+location.tree <- read.csv('Location_Tree2.csv', col.names=c("Country","Region","City","Neighborhood"), header=FALSE)
+location.tree <- merge(alltrain, location.tree, by.x="LocationNormalized", by.y="City")
+
+# Re-split
+set.seed(42)
+location.tree$fold <- sample(1:10, nrow(location.tree), replace = TRUE)
+location.tree.train <- subset(location.tree, fold != 3)
+location.tree.test <- subset(location.tree, fold == 3)
+
+#Location Tree Model
+model <- lm(SalaryNormalized ~ Region, location.tree.train)
+mae(predict(model, location.tree.test), location.tree.test$SalaryNormalized) # 11135
+summary(model) #.047
+
+model <- lm(SalaryNormalized ~ LocationNormalized, location.tree.train)
+mae(predict(model, location.tree.test), location.tree.test$SalaryNormalized) # 10874
+summary(model) #.091
+
+#Test Set
+finaltest <- read.csv("test.csv")
+finaltrain <- read.csv("train_50k.csv", header=TRUE)
+
+#Create a new category that gathers and isolates high paying jobs
+finaltest$highpaycategory <- grepl('Oil', alltrain$Category) | grepl('IT', alltrain$Category) | grepl('Accounting', alltrain$Category) | grepl('Finance', alltrain$Category) | grepl('Consultancy', alltrain$Category) | grepl('Engineering', alltrain$Category) | grepl('Advertising', alltrain$Category) | grepl('Scientific', alltrain$Category)
+finaltrain$highpaycategory <- grepl('Oil', alltrain$Category) | grepl('IT', alltrain$Category) | grepl('Accounting', alltrain$Category) | grepl('Finance', alltrain$Category) | grepl('Consultancy', alltrain$Category) | grepl('Engineering', alltrain$Category) | grepl('Advertising', alltrain$Category) | grepl('Scientific', alltrain$Category)
+
+#Clean up Normalized Locations, based on Alex Roussos submission
+final.locations.counts <- summary(finaltrain$LocationNormalized)
+final.top.locations <- names(final.locations.counts[order(final.locations.counts, decreasing= TRUE)][1:10])
+finaltrain$TopLocation <- factor(finaltrain$LocationNormalized, levels=final.top.locations)
+levels(finaltrain$TopLocation) <- c(levels(finaltrain$TopLocation), "(Other")
+finaltrain$TopLocation[is.na(finaltrain$TopLocation)] <- "(Other)"
+finaltrain$TopLocation[finaltrain$TopLocation == "UK"] <- "(Other)"
+finaltest$TopLocation <- factor(finaltest$LocationNormalized, levels=final.top.locations)
+levels(finaltest$TopLocation) <- c(levels(finaltest$TopLocation), "(Other")
+finaltest$TopLocation[is.na(finaltest$TopLocation)] <- "(Other)"
+finaltest$TopLocation[finaltest$TopLocation == "UK"] <- "(Other)"
+
+finaltest$Manager <- grepl('Lead', finaltest$Title, ignore.case=TRUE) | grepl('Senior', finaltest$Title, ignore.case=TRUE) | grepl('Head', finaltest$Title,ignore.case=TRUE) | grepl('Manager', finaltest$Title, ignore.case=TRUE) | grepl('Director', finaltest$Title, ignore.case=TRUE)
+finaltest$Experience <- grepl('experience', finaltest$FullDescription)
+finaltrain$Manager <- grepl('Lead', finaltrain$Title, ignore.case=TRUE) | grepl('Senior', finaltrain$Title, ignore.case=TRUE) | grepl('Head', finaltrain$Title,ignore.case=TRUE) | grepl('Manager', finaltrain$Title, ignore.case=TRUE) | grepl('Director', finaltrain$Title, ignore.case=TRUE)
+finaltrain$Experience <- grepl('experience', finaltrain$FullDescription)
+
+finalmodel <- lm(log(SalaryNormalized) ~ Category + TopLocation + Manager + ContractType*ContractTime, data=finaltrain)
+finalmodel$xlevels$Category <- c(finalmodel$xlevels$Category, "Part time Jobs")
+finalpredictions <- exp(predict(finalmodel, finaltest))
+finaloutput <- data.frame(finaltest$Id, Salary=finalpredictions)
+mae(exp(predict(finalmodel, finaltrain)), finaltrain$SalaryNormalized)
+summary(finalmodel)
+write.csv(finaloutput, "Micah's_submission.csv", row.names=FALSE)
